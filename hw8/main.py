@@ -1,8 +1,11 @@
+import os
 import pickle
+import re
 from collections import UserDict
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, InitVar
 from typing import List, Optional
+
 
 @dataclass
 class Field:
@@ -11,9 +14,11 @@ class Field:
     def __str__(self):
         return str(self.value)
 
+
 @dataclass
 class Name(Field):
     pass
+
 
 @dataclass
 class Phone(Field):
@@ -21,9 +26,15 @@ class Phone(Field):
         if not isinstance(self.value, str) or len(self.value) != 10 or not self.value.isdigit():
             raise ValueError("Phone number must contain exactly 10 digits")
 
+
 @dataclass
 class Email(Field):
-    pass
+    EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+    def __post_init__(self):
+        if not isinstance(self.value, str) or not re.match(self.EMAIL_PATTERN, self.value):
+            raise ValueError("Invalid email format")
+
 
 @dataclass
 class Birthday(Field):
@@ -34,6 +45,7 @@ class Birthday(Field):
             self.date_obj = datetime.strptime(self.value, "%d.%m.%Y").date()
         except ValueError:
             raise ValueError("Invalid date format, use DD.MM.YYYY")
+
 
 @dataclass
 class Record:
@@ -74,12 +86,15 @@ class Record:
         self.birthday = Birthday(birthday_str)
 
     def add_email(self, email_str):
-        pass
+        self.email = Email(email_str)
 
     def __str__(self):
-        phones_str = '; '.join(p.value for p in self.phones)
-        birthday_str = self.birthday.value if self.birthday else "Not set"
-        return f"Contact name: {self.name.value}, phones: {phones_str}, birthday: {birthday_str}"
+        phones_str = '; '.join(p.value for p in self.phones) if self.phones else "no phones"
+        birthday_str = self.birthday.value if self.birthday else "not set"
+        email_str = self.email.value if self.email else "not set"
+        return (f"Contact name: {self.name.value}, phones: {phones_str}, "
+                f"birthday: {birthday_str}, email: {email_str}")
+
 
 class AddressBook(UserDict):
     def add_record(self, record):
@@ -91,6 +106,8 @@ class AddressBook(UserDict):
     def delete(self, name):
         if name in self.data:
             del self.data[name]
+        else:
+            raise KeyError
 
     def get_upcoming_birthdays(self):
         today = datetime.today().date()
@@ -118,16 +135,25 @@ class AddressBook(UserDict):
 
         return upcoming
 
-def save_data(book, filename="addressbook.pkl"):
+
+DEFAULT_DATA_FILE = os.environ.get("DATA_FILE", "addressbook.pkl")
+
+
+def save_data(book, filename=DEFAULT_DATA_FILE):
+    directory = os.path.dirname(filename)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     with open(filename, "wb") as f:
         pickle.dump(book, f)
 
-def load_data(filename="addressbook.pkl"):
+
+def load_data(filename=DEFAULT_DATA_FILE):
     try:
         with open(filename, "rb") as f:
             return pickle.load(f)
     except FileNotFoundError:
         return AddressBook()
+
 
 def input_error(func):
     def inner(*args, **kwargs):
@@ -141,10 +167,12 @@ def input_error(func):
             return "Contact not found"
     return inner
 
+
 def parse_input(user_input):
     cmd, *args = user_input.split()
     cmd = cmd.strip().lower()
     return cmd, *args
+
 
 @input_error
 def add_contact(args, book: AddressBook):
@@ -162,6 +190,7 @@ def add_contact(args, book: AddressBook):
     record.add_phone(phone)
     return message
 
+
 @input_error
 def change_contact(args, book: AddressBook):
     if len(args) < 3:
@@ -175,6 +204,7 @@ def change_contact(args, book: AddressBook):
     record.edit_phone(old_phone, new_phone)
     return "Contact updated"
 
+
 @input_error
 def show_phone(args, book: AddressBook):
     if len(args) < 1:
@@ -187,11 +217,13 @@ def show_phone(args, book: AddressBook):
 
     return f"{name}'s phones: {'; '.join(p.value for p in record.phones)}"
 
+
 @input_error
 def show_all(book: AddressBook):
     if not book.data:
         return "Address book is empty"
     return '\n'.join(str(record) for record in book.data.values())
+
 
 @input_error
 def add_birthday(args, book: AddressBook):
@@ -205,6 +237,7 @@ def add_birthday(args, book: AddressBook):
 
     record.add_birthday(birthday)
     return "Birthday added"
+
 
 @input_error
 def show_birthday(args, book: AddressBook):
@@ -221,6 +254,37 @@ def show_birthday(args, book: AddressBook):
     else:
         return f"{name} does not have a birthday set"
 
+
+@input_error
+def add_email(args, book: AddressBook):
+    if len(args) < 2:
+        raise ValueError("Please provide name and email")
+    name, email = args
+    record = book.find(name)
+
+    if record is None:
+        raise KeyError
+
+    record.add_email(email)
+    return "Email added"
+
+
+@input_error
+def show_email(args, book: AddressBook):
+    if len(args) < 1:
+        raise ValueError("Please provide a name")
+    name = args[0]
+    record = book.find(name)
+
+    if record is None:
+        raise KeyError
+
+    if record.email:
+        return f"{name}'s email is {record.email.value}"
+    else:
+        return f"{name} does not have an email set"
+
+
 @input_error
 def birthdays(book: AddressBook):
     upcoming = book.get_upcoming_birthdays()
@@ -232,13 +296,39 @@ def birthdays(book: AddressBook):
         result += f"- {item['name']}: {item['birthday']}\n"
     return result.strip()
 
+
 @input_error
 def delete_contact(args, book: AddressBook):
-    pass
+    if len(args) < 1:
+        raise ValueError("Please provide a name")
+    name = args[0]
+    book.delete(name)
+    return f"Contact {name} deleted"
+
+
+def print_help():
+    print(
+        "Available commands:\n"
+        "  hello                                 - greet the bot\n"
+        "  add <name> <phone>                     - add contact or phone to existing one\n"
+        "  change <name> <old_phone> <new_phone>  - change a phone number\n"
+        "  phone <name>                           - show phones of a contact\n"
+        "  all                                    - show all contacts\n"
+        "  add-birthday <name> <DD.MM.YYYY>        - add birthday to contact\n"
+        "  show-birthday <name>                   - show birthday of a contact\n"
+        "  add-email <name> <email>               - add email to contact\n"
+        "  show-email <name>                      - show email of a contact\n"
+        "  birthdays                              - show birthdays in next 7 days\n"
+        "  delete <name>                          - delete a contact\n"
+        "  help                                   - show this message\n"
+        "  close / exit                           - save and exit"
+    )
+
 
 def main():
     book = load_data()
     print("Welcome to the assistant bot!")
+    print("Type 'help' to see the list of available commands.")
 
     while True:
         user_input = input("Enter a command: ")
@@ -254,6 +344,9 @@ def main():
 
         elif command == "hello":
             print("How can I help you?")
+
+        elif command == "help":
+            print_help()
 
         elif command == "add":
             print(add_contact(args, book))
@@ -273,6 +366,12 @@ def main():
         elif command == "show-birthday":
             print(show_birthday(args, book))
 
+        elif command == "add-email":
+            print(add_email(args, book))
+
+        elif command == "show-email":
+            print(show_email(args, book))
+
         elif command == "birthdays":
             print(birthdays(book))
 
@@ -280,7 +379,8 @@ def main():
             print(delete_contact(args, book))
 
         else:
-            print("Invalid command")
+            print("Invalid command. Type 'help' to see available commands.")
+
 
 if __name__ == "__main__":
     main()
